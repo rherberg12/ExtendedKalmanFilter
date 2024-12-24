@@ -1,2 +1,2 @@
 # ExtendedKalmanFilter
-Soltuion to Katalyst GNC take home project.
+Solution to Katalyst GNC take home project.
