@@ -9,6 +9,9 @@ df = pd.read_csv('measurements.csv', index_col = None, header = 'infer')
 gps_measurements = df[df['sensor_id'] == 'gps_measurement'].drop(['sensor_id','ra_deg','dec_deg','ra_rate_deg/s','dec_rate_deg/s'], axis = 1)
 ground_observer_1 = df[df['sensor_id'] == 'ground_observer_1'].drop(['sensor_id','r_x_km','r_y_km','r_z_km','v_x_km/s','v_y_km/s','v_z_km/s'], axis = 1)
 ground_observer_2 = df[df['sensor_id'] == 'ground_observer_2'].drop(['sensor_id','r_x_km','r_y_km','r_z_km','v_x_km/s','v_y_km/s','v_z_km/s'], axis = 1)
+gps_measurements.reset_index(drop=True, inplace=True)
+ground_observer_1.reset_index(drop=True, inplace=True)
+ground_observer_2.reset_index(drop=True, inplace=True)
 
 # Define geodetic position of ground stations
 G1 = np.array([-111.536,35.097,2.206]) # [degrees,degrees,km] (lat,long,height)
@@ -55,8 +58,8 @@ def EKF(dk, z_k, x_k_minus_1, u_k_minus_1, P_k_minus_1, H_k, L_k, R_k, eom_fun, 
         # Propogate state and covariance matrices
         integ_x = np.array(x_k_minus_1[:])
         integ_x = np.append(integ_x,P_k_minus_1.reshape(len(x_k_minus_1),len(x_k_minus_1))) # Isolated state for integration, steps from x_k_minus_1 -> x_k
-        for i in range(integ_points - 1):
-            integ_x_res = rk4(eom_fun, integration_dt, integ_time[i], integ_x, eom_options)
+        for i in range(integ_points - 2):
+            integ_x_res = rk4(eom_fun, integ_time[i+1]-integ_time[i], integ_time[i], integ_x, eom_options)
             integ_x = integ_x_res
         x_k = integ_x[:len(x_k_minus_1)]
         P_k = integ_x[len(x_k_minus_1):]
@@ -74,7 +77,7 @@ def EKF(dk, z_k, x_k_minus_1, u_k_minus_1, P_k_minus_1, H_k, L_k, R_k, eom_fun, 
 
 def eom_orbit_controlled_ECI_w_covariance(t, X, vars):
     # X[0:7] is state position and velocity, X[7:end] is covariance matrix (6x6)
-    mu = 3.986*10**14 # km^3/s^2
+    mu = 3.986*10**5 # km^3/s^2
     Qs = vars[0] # State model noise covariance matrix
     M = vars[1] # Noise covariance matrix mapping matrix
     u = vars[2] # Control vector
@@ -128,20 +131,23 @@ def gps_EKF_calculation():
     x_array = np.array(x_k_minus_1[:])
     time_array = np.array([t0])
 
-    for k, z_k in enumerate(gps_measurements, start = 1):
-        dk = gps_measurements.iloc[k,0] - gps_measurements.iloc[k-1,0] # Time step
+    for k in range(len(gps_measurements.index)-1):
+        dk = gps_measurements.iloc[k+1,0] - gps_measurements.iloc[k,0] # Time step
         x_estimate_k, P_estimate_k = EKF(dk,z_k_minus_1,x_k_minus_1,u_k_minus_1,P_k_minus_1,H_k_minus_1,L_k_minus_1,R_k_minus_1,eom_orbit_controlled_ECI_w_covariance,eom_options_k_minus_1)
         x_array = np.append(x_array,x_estimate_k[:])
         time_array = np.append(time_array,time_array[-1]+dk)
-
+        print(gps_measurements.iloc[k,0])
         x_k_minus_1 = x_estimate_k
         P_k_minus_1 = P_estimate_k
     
     # Post-Process
     x_array = x_array.reshape(len(time_array),6)
-    x_array = pd.DataFrame(x_array, index = time_array,columns=['x','y','z','vx','vy','vz'])
-    x_array['x'].plot()
-    gps_measurements['r_x_km'].plot()
+    x_array = pd.DataFrame(x_array, index = time_array, columns=['r_x_km','r_y_km','r_z_km','v_x_km/s','v_y_km/s','v_z_km/s'])
+    x_array['r_x_km'].plot(label = 'EKF')
+    gps_measurements.set_index('time',inplace=True)
+    correction = x_array.subtract(gps_measurements)
+    plt.plot(gps_measurements.index, gps_measurements['r_x_km'], label = 'gps')
+    plt.legend()
     plt.style.use('ggplot')
     plt.show()
 
