@@ -18,15 +18,14 @@ G1 = np.array([-111.536,35.097,2.206]) # [degrees,degrees,km] (lat,long,height)
 G2 = np.array([-70.692,-29.016,2.380]) # [degrees,degrees,km] (lat,long,height)
 
 # Define noise covariances matrices for sensors
-R_gps = np.eye(6) * np.array([[5000**2],[5000**2],[5000**2],[0.5**2],[0.5**2],[0.5**2]]) # [m, m/s] Satellite local GPS
+R_gps = np.eye(6) * np.array([[(5000**2)*10**-3],[(5000**2)*10**-3],[(5000**2)*10**-3],[(0.5**2)*10**-3],[(0.5**2)*10**-3],[(0.5**2)*10**-3]]) # [km, km/s] Satellite local GPS
 R_gs1 = np.eye(4) * np.array([[1],[1],[0.01],[0.01]]) # [arcSec^2, arcSec^2/sec^2] Ground station with electro-optical sensor, 1
 R_gs2 = np.eye(4) * np.array([[0.01],[0.01],[0.0001],[0.0001]]) # [arcSec^2, arcSec^2/sec^2] Ground station with electro-optical sensor, 2
 
 # Kalman Filter Input Matrices:
-sig_qr = 1e-3
-sig_qv = 1e-6
-Q_gps = [[sig_qr**2*np.eye(3),np.zeros((3,3))],[np.zeros((3,3)),sig_qv**2*np.eye(3)]] # State model noise covariance (6x6)
-Q_gps = np.array([[Q_gps[0][0][0][:],Q_gps[0][1][0][:]], [Q_gps[0][0][1][:],Q_gps[0][1][1][:]], [Q_gps[0][0][2][:],Q_gps[0][1][2][:]], [Q_gps[1][0][0][:],Q_gps[1][1][0][:]], [Q_gps[1][0][1][:],Q_gps[1][1][1][:]], [Q_gps[1][0][2][:],Q_gps[1][1][2][:]]])
+sig_qr = 1E-3
+sig_qv = 1E-6
+Q_gps = np.block([[sig_qr**2*np.eye(3),np.zeros((3,3))],[np.zeros((3,3)),sig_qv**2*np.eye(3)]]) # State model noise covariance (6x6)
 Q_gps = Q_gps.reshape(6,6)
 M_gps = np.eye(6) # Process noise (state model noise) mapping matrix
 # When Q is large, the Kalman Filter tracks large changes in
@@ -58,7 +57,7 @@ def EKF(dk, z_k, x_k_minus_1, u_k_minus_1, P_k_minus_1, H_k, L_k, R_k, eom_fun, 
         # Propogate state and covariance matrices
         integ_x = np.array(x_k_minus_1[:])
         integ_x = np.append(integ_x,P_k_minus_1.reshape(len(x_k_minus_1),len(x_k_minus_1))) # Isolated state for integration, steps from x_k_minus_1 -> x_k
-        for i in range(integ_points - 2):
+        for i in range(integ_points-1):
             integ_x_res = rk4(eom_fun, integ_time[i+1]-integ_time[i], integ_time[i], integ_x, eom_options)
             integ_x = integ_x_res
         x_k = integ_x[:len(x_k_minus_1)]
@@ -71,6 +70,8 @@ def EKF(dk, z_k, x_k_minus_1, u_k_minus_1, P_k_minus_1, H_k, L_k, R_k, eom_fun, 
 
     x_k = x_k + (K_k @ residual)
     P_k = P_k - (K_k @ H_k @ P_k)
+
+    corr = (K_k @ residual)
 
     return [x_k,P_k]
 
@@ -90,13 +91,10 @@ def eom_orbit_controlled_ECI_w_covariance(t, X, vars):
     #n_hat = np.cross(r_vec,v_vec)/np.linalg.norm(np.cross(r_vec,v_vec))
     #t_hat = np.cross(n_hat,r_hat)/np.linalg.norm(np.cross(n_hat,r_hat))
 
-    P = np.array(X[6:])
-    P = P.reshape(6,6)
+    P = X[6:].reshape(6,6)
     Gr = mu/np.linalg.norm(r_vec)**5*(3*(r_vec @ np.transpose(r_vec))-r_norm**2 * np.eye(3))
-    F = [[np.zeros((3,3)), np.eye(3)],[Gr, np.zeros((3,3))]]
-    F = np.array([[F[0][0][0][:],F[0][1][0][:]], [F[0][0][1][:],F[0][1][1][:]], [F[0][0][2][:],F[0][1][2][:]], [F[1][0][0][:],F[1][1][0][:]], [F[1][0][1][:],F[1][1][1][:]], [F[1][0][2][:],F[1][1][2][:]]])
-    F = F.reshape(6,6)
-    dP = F @ P + P @ np.transpose(F) + M @ Qs @ np.transpose(M)
+    F = np.block([[np.zeros((3,3)), np.eye(3)],[Gr, np.zeros((3,3))]])
+    dP = F @ P @ np.transpose(F) + M @ Qs @ np.transpose(M)
     # F*P+P*F.T simplifies computation load from true linear propogation equation, F*P*F.T
     # Linearization of the nonlinear dynamics was computed via the jacobian in Gr.
 
@@ -136,17 +134,22 @@ def gps_EKF_calculation():
         x_estimate_k, P_estimate_k = EKF(dk,z_k_minus_1,x_k_minus_1,u_k_minus_1,P_k_minus_1,H_k_minus_1,L_k_minus_1,R_k_minus_1,eom_orbit_controlled_ECI_w_covariance,eom_options_k_minus_1)
         x_array = np.append(x_array,x_estimate_k[:])
         time_array = np.append(time_array,time_array[-1]+dk)
-        print(gps_measurements.iloc[k,0])
         x_k_minus_1 = x_estimate_k
         P_k_minus_1 = P_estimate_k
     
     # Post-Process
+    ax = plt.figure().add_subplot(projection='3d')
     x_array = x_array.reshape(len(time_array),6)
     x_array = pd.DataFrame(x_array, index = time_array, columns=['r_x_km','r_y_km','r_z_km','v_x_km/s','v_y_km/s','v_z_km/s'])
-    x_array['r_x_km'].plot(label = 'EKF')
     gps_measurements.set_index('time',inplace=True)
     correction = x_array.subtract(gps_measurements)
-    plt.plot(gps_measurements.index, gps_measurements['r_x_km'], label = 'gps')
+    a_gps = np.zeros((len(gps_measurements),1))
+    a_EKF = np.zeros((len(gps_measurements),1))
+    for i in range(len(a_gps)):
+        a_gps[i] = np.sqrt(gps_measurements.iloc[i,0]**2 + gps_measurements.iloc[i,1]**2 + gps_measurements.iloc[i,2]**2)
+        a_EKF[i] = np.sqrt(x_array.iloc[i,0]**2 + x_array.iloc[i,1]**2 + x_array.iloc[i,2]**2)
+    ax.plot(gps_measurements['r_x_km'],gps_measurements['r_y_km'],gps_measurements['r_z_km'], label = 'gps')
+    ax.plot(x_array['r_x_km'],x_array['r_y_km'],x_array['r_z_km'],label = 'EKF')
     plt.legend()
     plt.style.use('ggplot')
     plt.show()
