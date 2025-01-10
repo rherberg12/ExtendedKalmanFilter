@@ -18,7 +18,7 @@ G1 = np.array([-111.536,35.097,2.206]) # [degrees,degrees,km] (lat,long,height)
 G2 = np.array([-70.692,-29.016,2.380]) # [degrees,degrees,km] (lat,long,height)
 
 # Define noise covariances matrices for sensors
-R_gps = np.eye(6) * np.array([[(5000**2)*10**-3],[(5000**2)*10**-3],[(5000**2)*10**-3],[(0.5**2)*10**-3],[(0.5**2)*10**-3],[(0.5**2)*10**-3]]) # [km, km/s] Satellite local GPS
+R_gps = np.eye(6) * np.array([[(5**2)],[(5**2)],[(5**2)],[(0.0005**2)],[(0.0005**2)],[(0.0005**2)]]) # [km, km/s] Satellite local GPS
 R_gs1 = np.eye(4) * np.array([[1],[1],[0.01],[0.01]]) # [arcSec^2, arcSec^2/sec^2] Ground station with electro-optical sensor, 1
 R_gs2 = np.eye(4) * np.array([[0.01],[0.01],[0.0001],[0.0001]]) # [arcSec^2, arcSec^2/sec^2] Ground station with electro-optical sensor, 2
 
@@ -26,7 +26,6 @@ R_gs2 = np.eye(4) * np.array([[0.01],[0.01],[0.0001],[0.0001]]) # [arcSec^2, arc
 sig_qr = 1E-3
 sig_qv = 1E-6
 Q_gps = np.block([[sig_qr**2*np.eye(3),np.zeros((3,3))],[np.zeros((3,3)),sig_qv**2*np.eye(3)]]) # State model noise covariance (6x6)
-Q_gps = Q_gps.reshape(6,6)
 M_gps = np.eye(6) # Process noise (state model noise) mapping matrix
 # When Q is large, the Kalman Filter tracks large changes in
 # the sensor measurements more closely than for smaller Q
@@ -92,7 +91,7 @@ def eom_orbit_controlled_ECI_w_covariance(t, X, vars):
     #t_hat = np.cross(n_hat,r_hat)/np.linalg.norm(np.cross(n_hat,r_hat))
 
     P = X[6:].reshape(6,6)
-    Gr = mu/np.linalg.norm(r_vec)**5*(3*(r_vec @ np.transpose(r_vec))-r_norm**2 * np.eye(3))
+    Gr = mu/(r_norm**3)*((3*(r_vec @ np.transpose(r_vec))/(r_norm**2)) - np.eye(3))
     F = np.block([[np.zeros((3,3)), np.eye(3)],[Gr, np.zeros((3,3))]])
     dP = F @ P @ np.transpose(F) + M @ Qs @ np.transpose(M)
     # F*P+P*F.T simplifies computation load from true linear propogation equation, F*P*F.T
@@ -116,26 +115,30 @@ def rk4(fun,dt,tk,xk,fun_vars): # fun_vars includes the control input and variab
 
 def gps_EKF_calculation():
     # Operate kalman filter through measurements to define estimates state vector
-    x_k_minus_1 = gps_measurements.iloc[0,1:]
-    z_k_minus_1 = x_k_minus_1
     t0 = gps_measurements.iloc[0,0] # Initial time
     u_k_minus_1 = eom_options_gps[2] # Assumption 1: no control
-    P_k_minus_1 = np.eye(6)*np.array([[1.0],[1.0],[1.0],[0.01],[0.01],[0.01]])
-    P_k_minus_1 = P_k_minus_1.reshape((len(x_k_minus_1)*len(x_k_minus_1)),1)
+    P_k_minus_1 = np.eye(6)*np.array([[0.1**2],[0.1**2],[0.1**2],[0.01**2],[0.01**2],[0.01**2]])*1E6 # Assume 0.1km and 0.01km/s uncertainty 
+    P_k_minus_1 = P_k_minus_1.reshape((len(gps_measurements.iloc[0,1:])*len(gps_measurements.iloc[0,1:])),1)
     H_k_minus_1 = H_gps
     L_k_minus_1 = L_gps
     R_k_minus_1 = R_gps
     eom_options_k_minus_1 = eom_options_gps
-    x_array = np.array(x_k_minus_1[:])
+    x_array = np.array(gps_measurements.iloc[0,1:])
     time_array = np.array([t0])
 
     for k in range(len(gps_measurements.index)-1):
         dk = gps_measurements.iloc[k+1,0] - gps_measurements.iloc[k,0] # Time step
+        z_k_minus_1 = gps_measurements.iloc[k,1:]
+        if k ==0: # Initialization
+            x_k_minus_1 = gps_measurements.iloc[k,1:]
+            P_k_minus_1 = np.eye(6)*np.array([[0.1**2],[0.1**2],[0.1**2],[0.01**2],[0.01**2],[0.01**2]])*1E6 # Assume large initial uncertainty 
+            P_k_minus_1 = P_k_minus_1.reshape((len(gps_measurements.iloc[0,1:])*len(gps_measurements.iloc[0,1:])),1)
+        else:
+            x_k_minus_1 = x_estimate_k
+            P_k_minus_1 = P_estimate_k
         x_estimate_k, P_estimate_k = EKF(dk,z_k_minus_1,x_k_minus_1,u_k_minus_1,P_k_minus_1,H_k_minus_1,L_k_minus_1,R_k_minus_1,eom_orbit_controlled_ECI_w_covariance,eom_options_k_minus_1)
         x_array = np.append(x_array,x_estimate_k[:])
         time_array = np.append(time_array,time_array[-1]+dk)
-        x_k_minus_1 = x_estimate_k
-        P_k_minus_1 = P_estimate_k
     
     # Post-Process
     ax = plt.figure().add_subplot(projection='3d')
